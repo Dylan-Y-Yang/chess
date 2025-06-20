@@ -2,39 +2,54 @@ import React from "react";
 import "./Controls.css";
 
 /**
- * Top-bar buttons + sliders
+ * Top toolbar: new-game, side picker, music, volume, depth slider.
  *
  * Props
  * ─────
- * onNewGame()               – reset board
- * sideToMove                – "White" | "Black"
- * musicPlaying              – boolean
- * onToggleMusic()           – play / pause bgm
- * volume                    – 0‒1
- * onVolumeChange(v:number)
- * depth                     – integer (1‒8)
- * onDepthChange(d:number)
+ * onNewGame()
+ * playAsWhite            boolean
+ * onSideChange(bool)     true = White
+ * sideToMove             "White" | "Black"
+ * musicPlaying           boolean
+ * onToggleMusic()
+ * volume, onVolumeChange
+ * depth,  onDepthChange
  */
 export default function Controls({
     onNewGame,
+    playAsWhite,
+    onSideChange,
     sideToMove,
     musicPlaying,
     onToggleMusic,
     volume,
     onVolumeChange,
     depth,
-    onDepthChange
+    onDepthChange,
 }) {
     return (
         <div className="controls">
             <button onClick={onNewGame}>New&nbsp;Game</button>
-            <span className="side-label">{sideToMove} to move</span>
+
+            {/* side picker */}
+            <label className="side-picker">
+                Play as:&nbsp;
+                <select
+                    value={playAsWhite ? "white" : "black"}
+                    onChange={(e) => onSideChange(e.target.value === "white")}
+                >
+                    <option value="white">White</option>
+                    <option value="black">Black</option>
+                </select>
+            </label>
+
+            <span className="turn">{sideToMove} to move</span>
 
             <button onClick={onToggleMusic}>
                 {musicPlaying ? "Pause Music" : "Play Music"}
             </button>
 
-            <label className="volume">
+            <label className="volume-slider">
                 Volume&nbsp;
                 <input
                     type="range"
@@ -46,7 +61,6 @@ export default function Controls({
                 />
             </label>
 
-            {/* NEW — depth slider */}
             <label className="depth">
                 Depth:&nbsp;<span>{depth}</span>
                 <input

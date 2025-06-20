@@ -1,5 +1,4 @@
 /* Controls.css */
-
 .controls {
     display: flex;
     flex-wrap: wrap;
@@ -32,14 +31,12 @@
 .controls .turn {
     font-weight: bold;
     font-size: 1rem;
-    color: #333333;
 }
 
 .controls .volume-slider {
     display: flex;
     align-items: center;
     font-size: 0.9rem;
-    color: #333333;
 }
 
 .controls .volume-slider input[type="range"] {
@@ -47,7 +44,7 @@
     cursor: pointer;
 }
 
-
+/* NEW */
 .controls label.depth {
     margin-left: 0.8rem;
 }
