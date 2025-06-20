@@ -1,0 +1,39 @@
+/* index.css */
+
+html,
+body {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    /* Use background.png here */
+    background:
+        linear-gradient(rgba(255, 255, 255, 0.5), rgba(255, 255, 255, 0.5)),
+        url("/static/background.png") center center / cover no-repeat;
+}
+
+body {
+    font-family: sans-serif;
+}
+
+.app {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    text-align: center;
+}
+
+/* Optional: popup & alert styles unchanged… */
+.popup-overlay {
+    /* … */
+}
+
+.popup {
+    /* … */
+}
+
+.alert {
+    /* … */
+}

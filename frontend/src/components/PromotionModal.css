@@ -1,0 +1,36 @@
+/* PromotionModal.css */
+.promo-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.3);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+}
+
+.promo-modal {
+    background: white;
+    padding: 20px;
+    border-radius: 8px;
+    text-align: center;
+}
+
+.promo-modal h2 {
+    margin-top: 0;
+}
+
+.promo-modal select {
+    font-size: 1rem;
+    margin: 10px 0;
+}
+
+.promo-buttons button {
+    margin: 0 5px;
+    padding: 8px 12px;
+    font-size: 1rem;
+    cursor: pointer;
+}
