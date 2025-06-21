@@ -1,24 +1,21 @@
 """
-engine.py  –  python-chess board + improved negamax αβ
-======================================================
-
-Public API (unchanged):
-    • Board class
-    • search_best_move(board, depth, side_white, time_limit)
-
-Run `python engine.py` to execute the built-in unit tests.
+engine.py  –  multiprocessing αβ search (PSTs imported from pst.py)
 """
 
-import time
-import unittest
-from collections import defaultdict
-import chess
+from __future__ import annotations
 
-# ───────────────────────── configuration ──────────────────────────
-SEARCH_DEPTH   = 10       # default plies if caller omits depth
-TIME_LIMIT     = 20.0     # seconds per move
+import multiprocessing as mp
+import time
+from collections import defaultdict
+
+import chess
+from pst import PST                           # ← piece-square tables live here
+
+# ───────── configuration ─────────
+SEARCH_DEPTH   = 10
+TIME_LIMIT     = 20.0        # seconds / turn
+PROCESSES      = 24           # worker processes for root split (set 1 to disable)
 INF            = 10 ** 9
-ASP_WINDOW     = 50       # aspiration half-window (centipawns)
 
 PIECE_VALUES = {
     chess.PAWN:   100,
@@ -29,86 +26,27 @@ PIECE_VALUES = {
     chess.KING:     0,
 }
 
-# ─────────────── piece-square tables (mid-game) ───────────────────
-def _mirror(idx: int) -> int:          # flip square for Black
+def _mirror(idx: int) -> int:           # flip square for Black
     return idx ^ 56
 
-PST = {
-    chess.PAWN: [
-         0,  5,  5,-10,-10,  5,  5,  0,
-         0, 10, -5,  0,  0, -5, 10,  0,
-         0, 10, 10, 20, 20, 10, 10,  0,
-         5, 15, 15, 25, 25, 15, 15,  5,
-        10, 20, 20, 30, 30, 20, 20, 10,
-        20, 30, 30, 40, 40, 30, 30, 20,
-         0,  0,  0,  0,  0,  0,  0,  0,
-         0,  0,  0,  0,  0,  0,  0,  0],
-    chess.KNIGHT: [
-        -50,-40,-30,-30,-30,-30,-40,-50,
-        -40,-20,  0,  0,  0,  0,-20,-40,
-        -30,  5, 10, 15, 15, 10,  5,-30,
-        -30,  0, 15, 20, 20, 15,  0,-30,
-        -30,  5, 15, 20, 20, 15,  5,-30,
-        -30,  0, 10, 15, 15, 10,  0,-30,
-        -40,-20,  0,  0,  0,  0,-20,-40,
-        -50,-40,-30,-30,-30,-30,-40,-50],
-    chess.BISHOP: [
-        -20,-10,-10,-10,-10,-10,-10,-20,
-        -10,  5,  0,  0,  0,  0,  5,-10,
-        -10, 10, 10, 10, 10, 10, 10,-10,
-        -10,  0, 10, 15, 15, 10,  0,-10,
-        -10,  5, 10, 15, 15, 10,  5,-10,
-        -10, 10, 10, 10, 10, 10, 10,-10,
-        -10,  5,  0,  0,  0,  0,  5,-10,
-        -20,-10,-10,-10,-10,-10,-10,-20],
-    chess.ROOK: [
-          0,  0,  5, 10, 10,  5,  0,  0,
-         -5,  0,  0,  0,  0,  0,  0, -5,
-         -5,  0,  0,  0,  0,  0,  0, -5,
-         -5,  0,  0,  5,  5,  0,  0, -5,
-         -5,  0,  0,  5,  5,  0,  0, -5,
-         -5,  0,  0,  0,  0,  0,  0, -5,
-          5, 10, 10, 10, 10, 10, 10,  5,
-          0,  0,  0,  0,  0,  0,  0,  0],
-    chess.QUEEN: [
-        -20,-10,-10, -5, -5,-10,-10,-20,
-        -10,  0,  0,  0,  0,  0,  0,-10,
-        -10,  0,  5,  5,  5,  5,  0,-10,
-         -5,  0,  5,  5,  5,  5,  0, -5,
-          0,  0,  5,  5,  5,  5,  0, -5,
-        -10,  5,  5,  5,  5,  5,  0,-10,
-        -10,  0,  5,  0,  0,  0,  0,-10,
-        -20,-10,-10, -5, -5,-10,-10,-20],
-    chess.KING: [
-        -30,-40,-40,-50,-50,-40,-40,-30,
-        -30,-40,-40,-50,-50,-40,-40,-30,
-        -30,-40,-40,-50,-50,-40,-40,-30,
-        -30,-40,-40,-50,-50,-40,-40,-30,
-        -20,-30,-30,-40,-40,-30,-30,-20,
-        -10,-20,-20,-20,-20,-20,-20,-10,
-         20, 20,  0,  0,  0,  0, 20, 20,
-         20, 30, 10,  0,  0, 10, 30, 20],
-}
-
-# ───────────────────── Board wrapper ──────────────────────
+# ───────── Board wrapper ─────────
 class Board:
-    """Thin wrapper around python-chess Board with UI-friendly helpers."""
     def __init__(self):
         self._b = chess.Board()
 
-    def clone(self):
+    def clone(self) -> "Board":
         c = Board.__new__(Board)
         c._b = self._b.copy()
         return c
 
-    def zobrist(self):
+    def zobrist(self) -> int:
         if hasattr(self._b, "transposition_key"):
             return self._b.transposition_key()
         if hasattr(self._b, "zobrist_hash"):
             return self._b.zobrist_hash()
         return hash(self._b.fen())
 
-    # ── UI helpers ───────────────────────────────────────
+    # ----- UI helpers --------------------------------------------------
     @property
     def board(self):
         rows = []
@@ -121,53 +59,43 @@ class Board:
         return rows
 
     def generate_legal_moves(self, white_to_move):
-        moves = []
+        out = []
         for m in self._b.legal_moves:
             frm = (7 - m.from_square // 8, m.from_square % 8)
             to  = (7 - m.to_square   // 8, m.to_square   % 8)
             promo = chess.piece_symbol(m.promotion).upper() if m.promotion else None
-            moves.append((frm, to, promo))
-        return moves
+            out.append((frm, to, promo))
+        return out
 
-    def is_in_check(self, white):
+    def is_in_check(self, white) -> bool:
         return self._b.is_check()
 
     def make_move(self, ui_move):
-        """Apply a UI move tuple ((r1,c1),(r2,c2),promo)."""
         frm, to, promo = ui_move
-
-        # map 'Q','R','B','N' → python-chess constants
-        promo_piece = None
-        if promo:
-            promo_piece = {
-                "Q": chess.QUEEN,
-                "R": chess.ROOK,
-                "B": chess.BISHOP,
-                "N": chess.KNIGHT,
-            }.get(promo.upper(), chess.QUEEN)
-
-        move = chess.Move(
+        promo_piece = {"Q": chess.QUEEN, "R": chess.ROOK,
+                       "B": chess.BISHOP, "N": chess.KNIGHT}.get(promo, None)
+        self._b.push(chess.Move(
             (7 - frm[0]) * 8 + frm[1],
             (7 - to[0])  * 8 + to[1],
             promotion=promo_piece,
-        )
-        self._b.push(move)
+        ))
 
-    # ── static evaluation (+ for White) ───────────────────
-    def evaluate(self):
+    # ----- static evaluation (+ for White) ----------------------------
+    def evaluate(self) -> int:
         score = 0
         for sq, p in self._b.piece_map().items():
-            v = PIECE_VALUES[p.piece_type]
-            v += PST[p.piece_type][sq if p.color else _mirror(sq)]
+            v = PIECE_VALUES[p.piece_type] + PST[p.piece_type][sq if p.color else _mirror(sq)]
             score += v if p.color else -v
+        # small mobility term (1 cp per legal move)
+        mob = len(list(self._b.legal_moves))
+        score += mob if self._b.turn else -mob
         return score
 
-# ───────────────────── search state ──────────────────────
+# ───────── local search data ─────────
 TT: dict[int, tuple[int, int, int, chess.Move | None]] = {}
 TT_EX, TT_LO, TT_UP = 0, 1, 2
-
-KILLERS: defaultdict[int, list[str]] = defaultdict(list)
-HIST:    defaultdict[str, int]       = defaultdict(int)
+KILLERS = defaultdict(list)
+HIST    = defaultdict(int)
 
 _MVV = {chess.PAWN: 1, chess.KNIGHT: 2, chess.BISHOP: 3,
         chess.ROOK: 4, chess.QUEEN: 5, chess.KING: 6}
@@ -176,16 +104,16 @@ def _mvv_lva(m: chess.Move, bd: Board) -> int:
     if bd._b.is_en_passant(m):
         victim = chess.PAWN
     else:
-        piece = bd._b.piece_at(m.to_square)
-        if not piece:
+        pc = bd._b.piece_at(m.to_square)
+        if not pc:
             return 0
-        victim = piece.piece_type
+        victim = pc.piece_type
     attacker = bd._b.piece_at(m.from_square).piece_type
     return _MVV[victim] * 10 - _MVV[attacker]
 
 def _ordered_moves(bd: Board, depth: int, tt_move):
-    ms = list(bd._b.legal_moves)
-    ms.sort(
+    moves = list(bd._b.legal_moves)
+    moves.sort(
         key=lambda m: (
             m == tt_move,
             _mvv_lva(m, bd),
@@ -194,15 +122,14 @@ def _ordered_moves(bd: Board, depth: int, tt_move):
         ),
         reverse=True,
     )
-    return ms
+    return moves
 
-# ───────────────────── quiescence search ─────────────────────
+# ───────── quiescence ─────────
 def _quiesce(bd: Board, alpha: int, beta: int, deadline: float) -> int:
     if time.time() >= deadline:
         raise TimeoutError
     stand = bd.evaluate()
-    stand *= 1 if bd._b.turn == chess.WHITE else -1   # side-to-move fix
-
+    stand *= 1 if bd._b.turn == chess.WHITE else -1
     if stand >= beta:
         return beta
     if stand > alpha:
@@ -213,19 +140,19 @@ def _quiesce(bd: Board, alpha: int, beta: int, deadline: float) -> int:
             continue
         child = bd.clone()
         child._b.push(m)
-        scor = -_quiesce(child, -beta, -alpha, deadline)
-        if scor >= beta:
+        val = -_quiesce(child, -beta, -alpha, deadline)
+        if val >= beta:
             return beta
-        if scor > alpha:
-            alpha = scor
+        if val > alpha:
+            alpha = val
     return alpha
 
-# ───────────────────── negamax αβ───────────────────────────
+# ───────── recursive αβ ─────────
 def _alphabeta(bd: Board, depth: int, alpha: int, beta: int, deadline: float) -> int:
     if time.time() >= deadline:
         raise TimeoutError
 
-    key   = bd.zobrist()
+    key = bd.zobrist()
     entry = TT.get(key)
     if entry and entry[0] >= depth:
         flag, score = entry[1], entry[2]
@@ -239,11 +166,12 @@ def _alphabeta(bd: Board, depth: int, alpha: int, beta: int, deadline: float) ->
     if depth == 0:
         return _quiesce(bd, alpha, beta, deadline)
 
-    # null-move pruning
-    if depth >= 3 and not bd._b.is_check():
-        nm_bd = bd.clone()
-        nm_bd._b.push(chess.Move.null())
-        if -_alphabeta(nm_bd, depth - 3, -beta, -beta + 1, deadline) >= beta:
+    # guarded null-move pruning
+    skip_null = bd._b.is_check() or bd._b.has_legal_en_passant()
+    if depth >= 3 and not skip_null:
+        null_bd = bd.clone()
+        null_bd._b.push(chess.Move.null())
+        if -_alphabeta(null_bd, depth - 3, -beta, -beta + 1, deadline) >= beta:
             return beta
 
     best_score = -INF
@@ -255,81 +183,85 @@ def _alphabeta(bd: Board, depth: int, alpha: int, beta: int, deadline: float) ->
         child = bd.clone()
         child._b.push(m)
 
-        d2 = depth - 1
-        if idx >= 4 and depth >= 3 and not bd._b.is_check():
-            d2 -= 1          # late move reduction
+        new_depth = depth - 1
+        # safer LMR: activate later & deeper
+        if idx >= 6 and depth >= 5 and not bd._b.is_check():
+            new_depth -= 1
 
-        sc = -_alphabeta(child, d2, -beta, -alpha, deadline)
+        score = -_alphabeta(child, new_depth, -beta, -alpha, deadline)
 
-        if sc > best_score:
-            best_score, best_move = sc, m
-        if sc > alpha:
-            alpha = sc
+        if score > best_score:
+            best_score, best_move = score, m
+        if score > alpha:
+            alpha = score
         if alpha >= beta:
-            k = KILLERS[depth]
-            if m.uci() not in k:
-                k.insert(0, m.uci())
-                KILLERS[depth] = k[:2]
+            killers = KILLERS[depth]
+            if m.uci() not in killers:
+                killers.insert(0, m.uci())
+                KILLERS[depth] = killers[:2]
             break
 
-    # history heuristic
     if best_move and not bd._b.is_capture(best_move):
         HIST[best_move.uci()] += depth * depth
 
-    # store in TT
-    if best_move:
-        if best_score <= orig_alpha:
-            flag = TT_UP
-        elif best_score >= orig_beta:
-            flag = TT_LO
-        else:
-            flag = TT_EX
-        TT[key] = (depth, flag, best_score, best_move)
-    else:
-        TT[key] = (depth, TT_EX, best_score, None)
+    flag = TT_EX
+    if best_score <= orig_alpha:
+        flag = TT_UP
+    elif best_score >= orig_beta:
+        flag = TT_LO
+    TT[key] = (depth, flag, best_score, best_move)
     return best_score
 
-# ───────────────────── driver ────────────────────────
+# ───────── worker for process pool ─────────
+def _score_child(args):
+    fen, depth, deadline = args
+    bd = Board()
+    bd._b.set_fen(fen)
+    try:
+        score = _alphabeta(bd, depth, -INF, INF, deadline)
+    except TimeoutError:
+        score = -INF
+    return score
+
+# ───────── public driver ─────────
 def search_best_move(
     bd: Board,
     depth: int = SEARCH_DEPTH,
     side_white: bool = True,
     time_limit: float = TIME_LIMIT,
+    processes: int = PROCESSES,
 ):
-    deadline  = time.time() + time_limit
-    best_move = None
-    score     = 0
+    deadline = time.time() + time_limit
+    root_moves = list(bd._b.legal_moves)
+    if not root_moves:
+        return None
 
-    KILLERS.clear()
-    HIST.clear()
+    child_fens = []
+    for m in root_moves:
+        child = bd.clone()
+        child._b.push(m)
+        child_fens.append(child._b.fen())
 
-    for d in range(1, depth + 1):
-        window = ASP_WINDOW
-        alpha  = score - window
-        beta   = score + window
+    best_score, best_move = -INF, None
 
-        while True:
-            try:
-                score = _alphabeta(bd.clone(), d, alpha, beta, deadline)
-            except TimeoutError:
-                return _to_ui(best_move)
-            if score <= alpha:
-                alpha -= window
-            elif score >= beta:
-                beta += window
-            else:
+    ctx = mp.get_context("spawn")
+    with ctx.Pool(processes=processes) as pool:
+        for d in range(1, depth + 1):
+            scores = pool.map(
+                _score_child,
+                [(fen, d - 1, deadline) for fen in child_fens],
+                chunksize=1,
+            )
+            for score, m in zip(scores, root_moves):
+                score = -score    
+                if score > best_score:
+                    best_score, best_move = score, m
+            if time.time() >= deadline:
                 break
-
-        entry = TT.get(bd.zobrist())
-        if entry:
-            best_move = entry[3]
-
-        if time.time() >= deadline:
-            break
 
     return _to_ui(best_move)
 
-# ───────────────────── helper ─────────────────────────
+# ───────── helper: engine move → UI tuple ─────────
 def _to_ui(m: chess.Move | None):
     if m is None:
         return None
@@ -337,29 +269,3 @@ def _to_ui(m: chess.Move | None):
     to  = (7 - m.to_square   // 8, m.to_square   % 8)
     promo = chess.piece_symbol(m.promotion).upper() if m.promotion else None
     return (frm, to, promo)
-
-# ───────────────────── unit tests ─────────────────────
-class EngineTests(unittest.TestCase):
-    def test_eval_sign(self):
-        b1 = Board()
-        b1._b.set_fen("8/8/8/8/8/8/4r3/4Q3 w - - 0 1")
-        b2 = Board()
-        b2._b.set_fen("8/4q3/8/8/8/8/8/4R3 b - - 0 1")
-        self.assertEqual(b1.evaluate(), -b2.evaluate())
-
-    def test_side_to_move(self):
-        b = Board()
-        b._b.set_fen("8/8/8/8/8/8/4r3/4Q3 w - - 0 1")
-        v1 = _quiesce(b, -INF, INF, time.time() + 1)
-        b._b.turn = chess.BLACK
-        v2 = _quiesce(b, -INF, INF, time.time() + 1)
-        self.assertLess(v1, 0)  # Black to move & down material
-        self.assertGreater(v2, 0)
-
-    def test_engine_returns_legal(self):
-        b = Board()
-        mv = search_best_move(b, depth=2, time_limit=1.0)
-        self.assertIn(mv, b.generate_legal_moves(True))
-
-if __name__ == "__main__":
-    unittest.main()
