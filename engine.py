@@ -13,14 +13,14 @@ from pst import PST                           # ← piece-square tables live her
 
 # ───────── configuration ─────────
 SEARCH_DEPTH   = 10
-TIME_LIMIT     = 20.0        # seconds / turn
-PROCESSES      = 24           # worker processes for root split (set 1 to disable)
+TIME_LIMIT     = 60       # seconds / turn
+PROCESSES      = 4          # worker processes for root split (set 1 to disable)
 INF            = 10 ** 9
 
 PIECE_VALUES = {
     chess.PAWN:   100,
     chess.KNIGHT: 320,
-    chess.BISHOP: 330,
+    chess.BISHOP: 350,
     chess.ROOK:   500,
     chess.QUEEN:  900,
     chess.KING:     0,
